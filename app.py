@@ -1,5 +1,6 @@
-"""Guestbook: the smallest app with real state. Reads DATABASE_URL (PostgreSQL) and falls back to a local
-SQLite file, so the *same image* runs against a Postgres sidecar (local/node) or Cloud SQL (cloudrun)."""
+"""Guestbook: the smallest app with real state. Reads DATABASE_URL or the libpq PG* variables (PostgreSQL) and
+falls back to a local SQLite file, so the *same image* runs against a Postgres sidecar (local/node), RDS (ECS)
+or Cloud SQL (Cloud Run)."""
 
 import os
 import platform
@@ -11,7 +12,8 @@ from flask import Flask, jsonify, redirect, request
 app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 SQLITE_PATH = os.environ.get("SQLITE_PATH", "guestbook.db")
-IS_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+# PGHOST alone also means Postgres: psycopg reads PGHOST, PGUSER, PGPASSWORD... when DATABASE_URL is empty.
+IS_PG = DATABASE_URL.startswith(("postgres://", "postgresql://")) or bool(os.environ.get("PGHOST"))
 
 
 def connect():
@@ -39,12 +41,13 @@ def init_db() -> None:
 
 def storage_label() -> str:
     if IS_PG:
-        host = DATABASE_URL.split("@", 1)[-1].split("/", 1)[0] or "unix-socket"
+        host = (DATABASE_URL.split("@", 1)[-1].split("/", 1)[0] if DATABASE_URL else os.environ.get("PGHOST")) or "unix-socket"
         return f"postgresql @ {host}"
     return f"sqlite @ {SQLITE_PATH} (ephemeral on Cloud Run)"
 
 
 @app.get("/health")
+@app.get("/health/ready")  # the path the migration platform checks after deploying
 def health():
     try:
         with connect() as c:
